@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# ${1} ceph pool
+# ${2} volume
+# ${3} auth user(who can rwx "${1}" pool)
+# ${4} file system
+# ${5} mount point
+
+# Umount
+ever_mount=$(df | grep ${5})
+if [ "${ever_mount}" != "" ] ; then
+    umount -t ${4} ${5} 2>/tmp/umount.error
+    if [ $? -gt 0 ]; then
+        cat /tmp/umount.error && /usr/bin/rm -rf /tmp/umount.error
+        exit 1
+    fi
+fi
+/usr/bin/rm -rf ${5}
+
+# Clear corresponding record in fstab
+sed -i "/.*${2}.*/d" /etc/fstab
+
+# Revoke rbdmap info from /etc/ceph/rbdmap
+sed -i "/.*${2}.*/d" /etc/ceph/rbdmap
+/etc/init.d/rbdmap reload
+
+# RBD unmap from /dev/rbd*
+rbdmapped=$(rbd showmapped | grep "${2}" | awk '{print $5}')
+if [ "${rbdmapped}" != "" ]; then
+    rbd unmap ${rbdmapped}
+fi
+
+# Remove RBD from CEPH cluster
+rbd rm ${1}/${2} --name client.${3}

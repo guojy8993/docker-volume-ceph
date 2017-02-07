@@ -1,0 +1,17 @@
+#!/bin/bash
+
+echo "############################ Create RBD Device ###################################"
+rbd create ${1}/${2} --size ${3} --name client.${4} --image-format 2 --image-features +1
+
+echo "############################ Map RBD Device to Local #############################"
+local_dev=$(rbd map ${1}/${2} --name client.${4})
+
+echo "############################ Make FileSsystem and Mount ##########################"
+mkfs.${5} -f ${local_dev}
+mkdir -p ${6}
+mount -t ${5} ${local_dev} ${6}
+
+echo "############################ Persist RBD Mappings ################################"
+echo "${1}/${2} id=${4}, keyring=$(ceph auth get-or-create client.${4} | grep key | awk '{print $3}')" >> /etc/ceph/rbdmap
+echo "${local_dev} ${6} ${5} defaults,_netdev 0 0 " >> /etc/fstab
+/etc/init.d/rbdmap reload 1>/dev/null 2>/dev/null
