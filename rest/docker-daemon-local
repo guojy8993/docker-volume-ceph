@@ -1,0 +1,200 @@
+#!/usr/env/python
+# author    guojy8993@163.com
+# date      2017/02/04
+# version   0.1
+# desc      docker overlay network plugin
+
+# Please visit the follwing website to know more about
+# network plugin protocol between docker daemon and plugins.
+# https://docs.docker.com/engine/extend/plugins_volume/
+
+from wsgiref.simple_server import make_server
+import copy
+import json
+import os
+import shutil
+
+def log(m):
+    with open("/root/log", "a") as f:
+        f.write("\n%s" % m)
+
+basic_directory = "/data/docker"
+metadata = "/var/lib/doceph/metadata"
+
+VOLUME_STATUS = {
+    "Mount": "used",
+    "Umount": "unused"
+}
+
+PATH_INFO_MAPPING_HANDLERS = {
+    "Plugin.Activate": "activate_plugin",
+    "VolumeDriver.Create": "create_volume",
+    "VolumeDriver.Remove": "remove_volume",
+    "VolumeDriver.Mount": "mount",
+    "VolumeDriver.Path": "volume_local_path",
+    "VolumeDriver.Unmount": "umount",
+    "VolumeDriver.Get": "volume_details",
+    "VolumeDriver.List": "volumes"
+}
+
+def activate_plugin(**request):
+    result = {
+        "Implements": ["VolumeDriver"]
+    }
+    return json.dumps(result)
+
+def create_volume(**request):
+    """
+    example request body for creating volume:    
+    {
+        "Name": "volume-1a2b3c4d",
+        "Opts": {}
+    }
+    """
+    name = request.get('Name')
+    files = [basic_directory, name]
+    target = os.path.join(*files)
+
+    if not os.path.exists(target):
+        os.makedirs(target)
+
+    content = { "Mountpoint": target }
+    content["Name"] = name
+    meta_files = [metadata, name]
+    target = os.path.join(*meta_files)
+    if not os.path.exists(target):
+        with open(target, 'a') as writer:
+            writer.write("%s" % json.dumps(content))
+    
+    result = { "Err": "" }
+    return json.dumps(result)
+
+def remove_volume(**request):
+
+    name = request.get('Name')
+    files = [basic_directory, name]
+    target = os.path.join(*files)
+    if os.path.exists(target):
+        shutil.rmtree(target)
+    
+    meta_files = [metadata, name]
+    target = os.path.join(*meta_files)
+    if os.path.exists(target):
+        os.remove(target)
+    
+    result = { "Err": "" }
+    return json.dumps(result)
+
+def mount(**request):
+    
+    name = request.get('Name')
+    files = [basic_directory, name]
+    target = os.path.join(*files)
+
+    if not os.path.exists(target):
+        os.makedirs(target)
+    result = { "Err": "" }
+    result["Mountpoint"] = target
+     
+    return json.dumps(result) 
+
+def volume_local_path(**request):
+
+    """
+    example request body:
+    { "Name": "volume_name" }
+    example response body:
+    { "Mountpoint": "/path/to/directory/on/host", "Err": "" }
+    """
+    name = request.get('Name')
+    files = [basic_directory, name]
+    target = os.path.join(*files)
+    
+    result = { "Err": "" }
+    result["Mountpoint"] = target
+    log(result)
+    return json.dumps(result)    
+
+def umount(**request):
+    name = request.get('Name')
+    container_id = request.get('ID')
+    files = [basic_directory, name]
+    target = os.path.join(*files)
+    
+    result = { "Err": "" }
+    log(result)
+    return json.dumps(result)
+
+def volume_details(**request):
+    name = request.get('Name')
+    files = [metadata, name]
+    target = os.path.join(*files)
+
+    result = {}   
+    if not os.path.exists(target):
+        result["Volume"] = {}
+        result["Err"] = "Volume %s not found" % name
+
+    else:
+        with open(target) as reader:
+            result["Volume"] = json.loads(reader.read())
+        result["Err"] = ""
+    log(result)
+    return json.dumps(result)
+
+def volumes(**request):
+    managed_volumes = []
+    if not os.path.exists(metadata):
+        result = {
+            "Volumes": managed_volumes,
+            "Err": ""
+        }
+        return json.dumps(result)
+    
+    volume_metadatas_iter = os.walk(metadata)
+    for volume_meta in volume_metadatas_iter.next()[-1]:
+        target = os.path.join(*[metadata, volume_meta])
+        with open(target) as reader:
+            managed_volumes.append(json.loads(reader.read()))
+    
+    result = {
+            "Volumes": managed_volumes,
+            "Err": ""
+    }
+    log(result)
+    return json.dumps(result)
+
+def application(environ, start_response):
+     
+    headers = [('Content-type', 'application/json')]
+    status = '200 OK'
+    start_response(status, headers)
+    
+    http_method = environ.get('REQUEST_METHOD')
+    if "post" != http_method.lower():
+        error = "Only POST Request Allowed"
+        return [ error ]
+
+    path = environ.get('PATH_INFO', '')
+    if "/" not in path:
+        error = "What can i do for you ?"
+        return [ error ]
+
+    _, stipulated_function = path.rsplit("/", 1)
+    if stipulated_function.strip() not in PATH_INFO_MAPPING_HANDLERS:
+        error = "Function %s not implemented yet" % stipulated_function
+        return [ error ]
+    handler = eval(PATH_INFO_MAPPING_HANDLERS.get(stipulated_function))
+
+    request_body_size = int(environ.get('CONTENT_LENGTH', 0))
+    if request_body_size > 0:
+        request_body = environ['wsgi.input'].read(request_body_size)
+        request_body = json.loads(request_body)
+    else:
+        request_body = {}
+
+    result = handler(**request_body)
+    return [ result ]
+
+httpd = make_server('', 8080, application)
+httpd.serve_forever()
