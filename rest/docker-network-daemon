@@ -2,10 +2,10 @@
 # author    guojy8993@163.com
 # date      2017/02/04
 # version   0.1
-# desc      docker volume plugin
+# desc      docker overlay network plugin
 
 # Please visit the follwing website to know more about
-# volume plugin protocol between docker daemon and plugins.
+# network plugin protocol between docker daemon and plugins.
 # https://docs.docker.com/engine/extend/plugins_volume/
 
 from wsgiref.simple_server import make_server
