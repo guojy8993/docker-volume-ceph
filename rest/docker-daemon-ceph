@@ -2,29 +2,52 @@
 # author    guojy8993@163.com
 # date      2017/02/04
 # version   0.1
-# desc      docker overlay network plugin
+# desc      docker volume plugin
 
 # Please visit the follwing website to know more about
-# network plugin protocol between docker daemon and plugins.
+# volume plugin protocol between docker daemon and plugins.
 # https://docs.docker.com/engine/extend/plugins_volume/
 
 from wsgiref.simple_server import make_server
+from oslo.config import cfg
+from subprocess import Popen,PIPE
 import copy
 import json
 import os
 import shutil
 
-def log(m):
-    with open("/root/log", "a") as f:
-        f.write("\n%s" % m)
+opts = [
+    cfg.StrOpt('ceph_pool',
+               default='volumes',
+               help='Ceph pool in which volumes are created'),
+    cfg.StrOpt('auth_user',
+               default='cinder',
+               help='Ceph user that can RWX ${ceph_pool}'),
+    cfg.IntOpt('default_volume_size',
+               default=1,
+               help='Default volume size, unit.GB'),
+    cfg.IntOpt('plugin_url_port',
+               default=8080,
+               help='Port that volume plugin listens to'),
+    cfg.StrOpt('plugin_url_ip',
+               default='0.0.0.0',
+               help='Ip address that volume plugin daemon locates at'),
+    cfg.StrOpt('local_dir',
+               default='/data/docker-volumes',
+               help='Local folder in which mountpoints files are created'),
+    cfg.StrOpt('default_file_system',
+               default='xfs',
+               help='File system used to format rbd'),
+    cfg.StrOpt('volume_metadata',
+               default='/var/lib/doceph/metadata',
+               help='Local folder used to store volume metadata'),
+    cfg.StrOpt('daemon_log',
+               default='/var/log/doceph.log',
+               help='Daemon log'),
+    ]
 
-basic_directory = "/data/docker"
-metadata = "/var/lib/doceph/metadata"
-
-VOLUME_STATUS = {
-    "Mount": "used",
-    "Umount": "unused"
-}
+CONF = cfg.CONF
+CONF.register_opts(opts)
 
 PATH_INFO_MAPPING_HANDLERS = {
     "Plugin.Activate": "activate_plugin",
@@ -37,6 +60,21 @@ PATH_INFO_MAPPING_HANDLERS = {
     "VolumeDriver.List": "volumes"
 }
 
+def util_log(msg):
+    with open(CONF.daemon_log, "a") as f:
+        f.write("%s\n" % msg if msg else "") 
+
+def util_exec(cmd):
+    pipe = Popen(cmd,
+                 shell=True,
+                 stdout=PIPE,
+                 stderr=PIPE)
+    return pipe.stdout.read(), pipe.stderr.read()
+
+def mount_point_busy(mp):
+    out, err = util_exec("df")
+    return mp in out
+
 def activate_plugin(**request):
     result = {
         "Implements": ["VolumeDriver"]
@@ -44,43 +82,66 @@ def activate_plugin(**request):
     return json.dumps(result)
 
 def create_volume(**request):
-    """
-    example request body for creating volume:    
-    {
-        "Name": "volume-1a2b3c4d",
-        "Opts": {}
-    }
-    """
-    name = request.get('Name')
-    files = [basic_directory, name]
-    target = os.path.join(*files)
 
+    name = request.get('Name')
+    opts = request.get('Opts', {})
+
+    files = [CONF.local_dir, name]
+    target = os.path.join(*files)
     if not os.path.exists(target):
         os.makedirs(target)
+    elif mount_point_busy(target):
+        return json.dumps({"Err":"Volume exists and device busy !"})
 
+    pool = opts.get("pool", CONF.ceph_pool)
+    fs = opts.get("fs", CONF.default_file_system)
+    size = opts.get("size", CONF.default_volume_size)
+    user = opts.get("auth_user", CONF.auth_user)
+
+    prepare_volume = "/usr/bin/rbdmap2local %s \
+        %s %s %s %s %s" % (pool, name, size*1024, user, fs, target)
+    out, err = util_exec(prepare_volume)
+
+    util_log(err)
+
+    if len(err.strip()) > 0:
+        return json.dumps({"Err":"Fail to create volume: %s" % err})
+    
     content = { "Mountpoint": target }
     content["Name"] = name
-    meta_files = [metadata, name]
+    content["Opts"] = opts
+    meta_files = [CONF.volume_metadata, name]
     target = os.path.join(*meta_files)
+   
     if not os.path.exists(target):
         with open(target, 'a') as writer:
             writer.write("%s" % json.dumps(content))
-    
+   
+    # Lzying creating actual volume
     result = { "Err": "" }
     return json.dumps(result)
 
 def remove_volume(**request):
 
     name = request.get('Name')
-    files = [basic_directory, name]
+    files = [CONF.local_dir, name]
     target = os.path.join(*files)
     if os.path.exists(target):
-        shutil.rmtree(target)
-    
-    meta_files = [metadata, name]
-    target = os.path.join(*meta_files)
-    if os.path.exists(target):
-        os.remove(target)
+        if mount_point_busy(target):
+            meta_files = [CONF.volume_metadata, name]
+            meta_file = os.path.join(*meta_files)
+            meta = {}
+            with open(meta_file) as f:
+                meta = json.loads(f.read())
+
+            revoke_rbdmap = "/usr/bin/rbdmap_revoke %s %s %s\
+                                %s %s" % (meta["Opts"]["pool"],
+                                          meta["Name"],
+                                          meta["Opts"]["auth_user"],
+                                          meta["Opts"]["fs"],
+                                          meta["Mountpoint"])
+            out, err = util_exec(revoke_rbdmap)
+            os.remove(meta_file)
     
     result = { "Err": "" }
     return json.dumps(result)
@@ -100,19 +161,12 @@ def mount(**request):
 
 def volume_local_path(**request):
 
-    """
-    example request body:
-    { "Name": "volume_name" }
-    example response body:
-    { "Mountpoint": "/path/to/directory/on/host", "Err": "" }
-    """
     name = request.get('Name')
     files = [basic_directory, name]
     target = os.path.join(*files)
     
     result = { "Err": "" }
     result["Mountpoint"] = target
-    log(result)
     return json.dumps(result)    
 
 def umount(**request):
@@ -122,7 +176,6 @@ def umount(**request):
     target = os.path.join(*files)
     
     result = { "Err": "" }
-    log(result)
     return json.dumps(result)
 
 def volume_details(**request):
@@ -139,7 +192,6 @@ def volume_details(**request):
         with open(target) as reader:
             result["Volume"] = json.loads(reader.read())
         result["Err"] = ""
-    log(result)
     return json.dumps(result)
 
 def volumes(**request):
@@ -161,7 +213,6 @@ def volumes(**request):
             "Volumes": managed_volumes,
             "Err": ""
     }
-    log(result)
     return json.dumps(result)
 
 def application(environ, start_response):
@@ -196,5 +247,6 @@ def application(environ, start_response):
     result = handler(**request_body)
     return [ result ]
 
-httpd = make_server('', 8080, application)
-httpd.serve_forever()
+if __name__ == "__main__":
+    httpd = make_server('', 8080, application)
+    httpd.serve_forever()
