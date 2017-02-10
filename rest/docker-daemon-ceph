@@ -149,20 +149,17 @@ def remove_volume(**request):
 def mount(**request):
     
     name = request.get('Name')
-    files = [basic_directory, name]
+    files = [CONF.local_dir, name]
     target = os.path.join(*files)
 
-    if not os.path.exists(target):
-        os.makedirs(target)
     result = { "Err": "" }
-    result["Mountpoint"] = target
-     
+    result["Mountpoint"] = target 
     return json.dumps(result) 
 
 def volume_local_path(**request):
 
     name = request.get('Name')
-    files = [basic_directory, name]
+    files = [CONF.local_dir, name]
     target = os.path.join(*files)
     
     result = { "Err": "" }
@@ -172,7 +169,7 @@ def volume_local_path(**request):
 def umount(**request):
     name = request.get('Name')
     container_id = request.get('ID')
-    files = [basic_directory, name]
+    files = [CONF.local_dir, name]
     target = os.path.join(*files)
     
     result = { "Err": "" }
@@ -180,7 +177,7 @@ def umount(**request):
 
 def volume_details(**request):
     name = request.get('Name')
-    files = [metadata, name]
+    files = [CONF.volume_metadata, name]
     target = os.path.join(*files)
 
     result = {}   
@@ -196,16 +193,16 @@ def volume_details(**request):
 
 def volumes(**request):
     managed_volumes = []
-    if not os.path.exists(metadata):
+    if not os.path.exists(CONF.volume_metadata):
         result = {
             "Volumes": managed_volumes,
             "Err": ""
         }
         return json.dumps(result)
     
-    volume_metadatas_iter = os.walk(metadata)
+    volume_metadatas_iter = os.walk(CONF.volume_metadata)
     for volume_meta in volume_metadatas_iter.next()[-1]:
-        target = os.path.join(*[metadata, volume_meta])
+        target = os.path.join(*[CONF.volume_metadata, volume_meta])
         with open(target) as reader:
             managed_volumes.append(json.loads(reader.read()))
     
@@ -248,5 +245,5 @@ def application(environ, start_response):
     return [ result ]
 
 if __name__ == "__main__":
-    httpd = make_server('', 8080, application)
+    httpd = make_server('', CONF.plugin_url_port, application)
     httpd.serve_forever()
