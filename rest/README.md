@@ -16,7 +16,7 @@ volume_metadata
 plugin_url_port
 ```
 
-> ** 注意: **
+> **注意**
 
 > 创建 local_dir 对应的路径,作为mountpoint(s)的父目录
 
