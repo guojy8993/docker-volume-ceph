@@ -83,7 +83,9 @@ ___
 #### (2) 创建卷
 请求:
 ```
-[root@kvm-10216196 instance]# curl -X POST -d '{"Name": "volume-1q2xw342f","Opts":{"pool":"volumes","fs":"xfs","size":1,"auth_user":"cinder"}}' 10.160.0.144:8080/VolumeDriver.Create
+[root@kvm-10216196 instance]# curl -X POST -d '{"Name": "volume-1q2xw342f",\
+"Opts":{"pool":"volumes","fs":"xfs","size":1,"auth_user":"cinder"}}' \
+10.160.0.144:8080/VolumeDriver.Create
 ```
 
 响应:
