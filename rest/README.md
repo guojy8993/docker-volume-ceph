@@ -2,7 +2,7 @@
 #### (1) 安装软件doceph-daemon-ceph以及依赖包
 ```
 [root@dev ~]# cp /path/to/docker-volume-ceph/rest/docker-daemon-ceph /opt/
-[root@dev ~]# cp /path/to/docker-volume-ceph/contrib/upstart/rbdmap /usr/bin/
+[root@dev ~]# cp /path/to/docker-volume-ceph/contrib/upstart/rbdmap* /usr/bin/
 [root@dev ~]# chmod +x /opt/docker-daemon-ceph
 [root@dev ~]# chmod +x /usr/bin/rbdmap*
 [root@dev ~]# yum install oslo.config -y
